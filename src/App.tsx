@@ -173,15 +173,15 @@ async function createEntry(entry: NewEntry): Promise<Entry> {
   return withDisplay(await response.json());
 }
 
-async function deleteEntry(id: Entry["id"]) {
-  const response = await fetch(`${API_URL}/${encodeURIComponent(String(id))}`, {
-    method: "DELETE",
-  });
+// async function deleteEntry(id: Entry["id"]) {
+//   const response = await fetch(`${API_URL}/${encodeURIComponent(String(id))}`, {
+//     method: "DELETE",
+//   });
 
-  if (!response.ok && response.status !== 404) {
-    throw new Error("신청을 삭제하지 못했습니다.");
-  }
-}
+//   if (!response.ok && response.status !== 404) {
+//     throw new Error("신청을 삭제하지 못했습니다.");
+//   }
+// }
 
 /* ── 메인 ── */
 export default function App() {
@@ -285,17 +285,17 @@ export default function App() {
     }
   };
 
-  const del = async (id: Entry["id"]) => {
-    const previous = entries;
-    setEntries((current) => current.filter((e) => e.id !== id));
+  // const del = async (id: Entry["id"]) => {
+  //   const previous = entries;
+  //   setEntries((current) => current.filter((e) => e.id !== id));
 
-    try {
-      await deleteEntry(id);
-    } catch {
-      setEntries(previous);
-      showToast("신청을 삭제하지 못했어요.");
-    }
-  };
+  //   try {
+  //     await deleteEntry(id);
+  //   } catch {
+  //     setEntries(previous);
+  //     showToast("신청을 삭제하지 못했어요.");
+  //   }
+  // };
 
   return (
     <>
