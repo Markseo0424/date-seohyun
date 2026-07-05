@@ -1,13 +1,44 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+
+type Particle = {
+  x: number;
+  y: number;
+  vy: number;
+  vx: number;
+  rot: number;
+  vr: number;
+  s: number;
+  e: string;
+};
+
+type Entry = {
+  id: string;
+  name: string;
+  date: string;
+  time: string;
+  note: string;
+  displayDate: string;
+  displayTime: string;
+  ts: number;
+};
+
+type ApiEntry = Partial<Entry> & {
+  id?: string | number;
+  ts?: string | number;
+};
+
+type NewEntry = Pick<Entry, "name" | "date" | "time" | "note">;
+type LoadOptions = { silent?: boolean; notifyOnError?: boolean };
 
 /* ── 파티클 ── */
 const PETALS = ["🌸", "💖", "💕", "✨", "🌷", "💗", "🫧"];
-function Particles({ active }) {
-  const ref = useRef(null);
+function Particles({ active }: { active: boolean }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
     const ctx = c.getContext("2d");
+    if (!ctx) return;
     const rsz = () => {
       c.width = window.innerWidth;
       c.height = window.innerHeight;
@@ -18,8 +49,8 @@ function Particles({ active }) {
       ctx.clearRect(0, 0, c.width, c.height);
       return () => window.removeEventListener("resize", rsz);
     }
-    let ps = Array.from({ length: 18 }, () => mkp(c, true));
-    let raf;
+    let ps: Particle[] = Array.from({ length: 18 }, () => mkp(c, true));
+    let raf = 0;
     const loop = () => {
       ctx.clearRect(0, 0, c.width, c.height);
       if (ps.length < 45 && Math.random() < 0.25) ps.push(mkp(c, false));
@@ -62,7 +93,7 @@ function Particles({ active }) {
     />
   );
 }
-function mkp(c, rand) {
+function mkp(c: HTMLCanvasElement, rand: boolean): Particle {
   return {
     x: Math.random() * (c.width || window.innerWidth),
     y: rand ? Math.random() * (c.height || window.innerHeight) : -20,
@@ -76,7 +107,7 @@ function mkp(c, rand) {
 }
 
 /* ── 포맷 ── */
-function fmtDate(v) {
+function fmtDate(v: string) {
   if (!v) return "";
   const [y, m, d] = v.split("-");
   const dt = new Date(+y, +m - 1, +d);
@@ -84,7 +115,7 @@ function fmtDate(v) {
     ["일", "월", "화", "수", "목", "금", "토"][dt.getDay()]
   })`;
 }
-function fmtTime(v) {
+function fmtTime(v: string) {
   if (!v) return "";
   const [h, mi] = v.split(":").map(Number);
   return `${h < 12 ? "오전" : "오후"} ${
@@ -106,29 +137,50 @@ const NOTE_COLORS = [
 ];
 const PINS = ["🩷", "🩵", "💛", "🩶", "💜", "🧡", "💚", "❤️"];
 
-/* ── Persistent Storage 헬퍼 ── */
-const SKEY = "dateinvite-v3";
-async function sGet() {
-  try {
-    if (window.storage) {
-      const r = await window.storage.get(SKEY, true);
-      if (r?.value) return JSON.parse(r.value);
-    }
-  } catch {}
-  try {
-    const s = localStorage.getItem(SKEY);
-    if (s) return JSON.parse(s);
-  } catch {}
-  return [];
+/* ── Shared DB API 헬퍼 ── */
+const API_URL = "/api/applications";
+
+function withDisplay(entry: ApiEntry): Entry {
+  return {
+    ...entry,
+    id: String(entry.id ?? Date.now()),
+    name: entry.name || "",
+    date: entry.date || "",
+    time: entry.time || "",
+    note: entry.note || "",
+    displayDate: entry.displayDate || fmtDate(entry.date || ""),
+    displayTime: entry.displayTime || fmtTime(entry.time || ""),
+    ts: Number(entry.ts) || Date.now(),
+  };
 }
-async function sSet(arr) {
-  try {
-    if (window.storage)
-      await window.storage.set(SKEY, JSON.stringify(arr), true);
-  } catch {}
-  try {
-    localStorage.setItem(SKEY, JSON.stringify(arr));
-  } catch {}
+
+async function readEntries(): Promise<Entry[]> {
+  const response = await fetch(API_URL, { cache: "no-store" });
+  if (!response.ok) throw new Error("신청 목록을 불러오지 못했습니다.");
+
+  const data = await response.json();
+  return Array.isArray(data) ? data.map(withDisplay) : [];
+}
+
+async function createEntry(entry: NewEntry): Promise<Entry> {
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(entry),
+  });
+
+  if (!response.ok) throw new Error("신청을 저장하지 못했습니다.");
+  return withDisplay(await response.json());
+}
+
+async function deleteEntry(id: Entry["id"]) {
+  const response = await fetch(`${API_URL}/${encodeURIComponent(String(id))}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok && response.status !== 404) {
+    throw new Error("신청을 삭제하지 못했습니다.");
+  }
 }
 
 /* ── 메인 ── */
@@ -138,22 +190,61 @@ export default function App() {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [note, setNote] = useState("");
-  const [entries, setEntries] = useState([]);
+  const [entries, setEntries] = useState<Entry[]>([]);
   const [toast, setToast] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2600);
+  }, []);
+
+  const loadEntries = useCallback(
+    async ({ silent = false, notifyOnError = true }: LoadOptions = {}) => {
+      if (silent) setRefreshing(true);
+      else setLoaded(false);
+
+      try {
+        const data = await readEntries();
+        setEntries(data);
+      } catch {
+        if (notifyOnError) showToast("신청 목록을 불러오지 못했어요.");
+      } finally {
+        setLoaded(true);
+        setRefreshing(false);
+      }
+    },
+    [showToast],
+  );
 
   /* 초기 로드 */
   useEffect(() => {
-    sGet().then((d) => {
-      setEntries(Array.isArray(d) ? d : []);
-      setLoaded(true);
-    });
-  }, []);
+    const timer = window.setTimeout(() => {
+      void loadEntries();
+    }, 0);
 
-  const showToast = (msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 2600);
-  };
+    return () => window.clearTimeout(timer);
+  }, [loadEntries]);
+
+  /* 목록 화면에서는 모두에게 보이는 DB 목록을 주기적으로 새로고침 */
+  useEffect(() => {
+    if (screen !== "list") return;
+
+    const refreshTimer = window.setTimeout(() => {
+      void loadEntries({ silent: true, notifyOnError: false });
+    }, 0);
+    const timer = setInterval(
+      () => loadEntries({ silent: true, notifyOnError: false }),
+      15000,
+    );
+
+    return () => {
+      window.clearTimeout(refreshTimer);
+      clearInterval(timer);
+    };
+  }, [screen, loadEntries]);
 
   const submit = async () => {
     if (!name.trim()) {
@@ -172,30 +263,38 @@ export default function App() {
       showToast("💭 하고 싶은 데이트를 적어줘요!");
       return;
     }
-    const e = {
-      id: Date.now(),
-      name: name.trim(),
-      date,
-      time,
-      note: note.trim(),
-      displayDate: fmtDate(date),
-      displayTime: fmtTime(time),
-      ts: Date.now(),
-    };
-    const next = [e, ...entries];
-    setEntries(next);
-    await sSet(next);
-    setName("");
-    setDate("");
-    setTime("");
-    setNote("");
-    setScreen("list");
+    setSaving(true);
+    try {
+      const created = await createEntry({
+        name: name.trim(),
+        date,
+        time,
+        note: note.trim(),
+      });
+
+      setEntries((current) => [created, ...current]);
+      setName("");
+      setDate("");
+      setTime("");
+      setNote("");
+      setScreen("list");
+    } catch {
+      showToast("신청을 저장하지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const del = async (id) => {
-    const next = entries.filter((e) => e.id !== id);
-    setEntries(next);
-    await sSet(next);
+  const del = async (id: Entry["id"]) => {
+    const previous = entries;
+    setEntries((current) => current.filter((e) => e.id !== id));
+
+    try {
+      await deleteEntry(id);
+    } catch {
+      setEntries(previous);
+      showToast("신청을 삭제하지 못했어요.");
+    }
   };
 
   return (
@@ -348,8 +447,12 @@ export default function App() {
                     fontFamily: "'Nunito',sans-serif",
                     transition: "background .15s",
                   }}
-                  onMouseOver={(e) => (e.target.style.background = "#fce7f3")}
-                  onMouseOut={(e) => (e.target.style.background = "none")}
+                  onMouseOver={(e) =>
+                    (e.currentTarget.style.background = "#fce7f3")
+                  }
+                  onMouseOut={(e) =>
+                    (e.currentTarget.style.background = "none")
+                  }
                 >
                   📋 신청 목록 보기 ({entries.length})
                 </button>
@@ -560,6 +663,7 @@ export default function App() {
             <button
               className="hbtn"
               onClick={submit}
+              disabled={saving}
               style={{
                 width: "100%",
                 background: "linear-gradient(135deg,#f472b6,#ec4899)",
@@ -570,12 +674,13 @@ export default function App() {
                 fontSize: "1.1rem",
                 fontWeight: 800,
                 fontFamily: "'Nunito',sans-serif",
-                cursor: "pointer",
+                cursor: saving ? "wait" : "pointer",
+                opacity: saving ? 0.75 : 1,
                 boxShadow: "0 6px 20px rgba(236,72,153,.3)",
                 transition: "transform .15s,filter .15s",
               }}
             >
-              약속 신청하기 💌
+              {saving ? "저장 중..." : "약속 신청하기 💌"}
             </button>
 
             <button
@@ -679,6 +784,24 @@ export default function App() {
               }}
             >
               🏠 처음으로
+            </button>
+            <button
+              onClick={() => loadEntries({ silent: true })}
+              disabled={refreshing}
+              style={{
+                background: "#fff",
+                border: "2px solid #c4b5fd",
+                borderRadius: 99,
+                padding: "11px 22px",
+                fontSize: ".95rem",
+                fontWeight: 700,
+                color: "#7c3aed",
+                cursor: refreshing ? "wait" : "pointer",
+                opacity: refreshing ? 0.7 : 1,
+                fontFamily: "'Nunito',sans-serif",
+              }}
+            >
+              {refreshing ? "불러오는 중..." : "↻ 새로고침"}
             </button>
           </div>
 
