@@ -216,7 +216,7 @@ export default function App() {
         setRefreshing(false);
       }
     },
-    [showToast],
+    [showToast]
   );
 
   /* 초기 로드 */
@@ -237,7 +237,7 @@ export default function App() {
     }, 0);
     const timer = setInterval(
       () => loadEntries({ silent: true, notifyOnError: false }),
-      15000,
+      15000
     );
 
     return () => {
@@ -893,7 +893,7 @@ export default function App() {
                       {pin}
                     </div>
                     {/* 삭제 */}
-                    <button
+                    {/* <button
                       className="del"
                       onClick={() => del(e.id)}
                       style={{
@@ -911,7 +911,7 @@ export default function App() {
                       }}
                     >
                       ✕
-                    </button>
+                    </button> */}
 
                     {/* 이름 */}
                     <div
